@@ -152,7 +152,7 @@ export function CommissionList({ onSelectCommission }: CommissionListProps) {
               key={commission.id}
               className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6 hover:shadow-md transition-shadow"
             >
-              <div className="flex justify-between items-start">
+              <div className="flex justify-between items-center">
                 <div className="flex-1">
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
                     {commission.title}
@@ -185,7 +185,7 @@ export function CommissionList({ onSelectCommission }: CommissionListProps) {
                     </div>
                   </div>
                 </div>
-                <div className="flex space-x-2 ml-4">
+                <div className="flex space-x-2 h- ml-4">
                   <button
                     onClick={() => onSelectCommission(commission.id)}
                     className="p-2 text-gray-600 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"

@@ -35,6 +35,9 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
     amount: '',
     type: 'income' as 'income' | 'outcome'
   });
+  // File upload state for Voice
+  const [voiceFiles, setVoiceFiles] = useState<{ name: string; url: string; id?: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [draggedPhase, setDraggedPhase] = useState<Phase | null>(null);
   const [draggedVoice, setDraggedVoice] = useState<Voice | null>(null);
 
@@ -350,6 +353,56 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
                             <option value="outcome">Uscita</option>
                           </select>
                         </div>
+                        {/* File upload for PDFs */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Allega PDF</label>
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            multiple
+                            onChange={async (e) => {
+                              const files = e.target.files;
+                              if (!files) return;
+                              setUploading(true);
+                              // Simulate upload, replace with real upload logic
+                              const uploaded: { name: string; url: string }[] = [];
+                              for (let i = 0; i < files.length; i++) {
+                                const file = files[i];
+                                if (file.type !== 'application/pdf') continue;
+                                // TODO: Replace with real upload, e.g. Supabase Storage
+                                // For now, just use a fake URL
+                                uploaded.push({ name: file.name, url: URL.createObjectURL(file) });
+                              }
+                              setVoiceFiles((prev) => [...prev, ...uploaded]);
+                              setUploading(false);
+                              // Reset input value so same file can be re-uploaded if removed
+                              e.target.value = '';
+                            }}
+                            className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-white dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600 focus:outline-none"
+                          />
+                          {uploading && (
+                            <div className="mt-2 text-xs text-indigo-600 dark:text-indigo-400 flex items-center">
+                              <svg className="animate-spin h-4 w-4 mr-2" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" /></svg>
+                              Caricamento...
+                            </div>
+                          )}
+                          {/* Uploaded files badges */}
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            {voiceFiles.map((file, idx) => (
+                              <span key={file.url + idx} className="inline-flex items-center px-2 py-1 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-200 rounded text-xs">
+                                {file.name}
+                                <button
+                                  type="button"
+                                  className="ml-2 text-xs text-red-500 hover:text-red-700 focus:outline-none"
+                                  onClick={() => setVoiceFiles((prev) => prev.filter((_, i) => i !== idx))}
+                                  title="Rimuovi file"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                         <div className="flex space-x-2">
                           <button
                             type="submit"
@@ -363,6 +416,7 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
                               setShowVoiceForm(null);
                               setEditingVoice(null);
                               setVoiceForm({ description: '', amount: '', type: 'income' });
+                              setVoiceFiles([]);
                             }}
                             className="px-3 py-2 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 rounded-lg transition-colors text-sm"
                           >
