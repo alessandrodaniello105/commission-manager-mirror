@@ -1,4 +1,3 @@
-import { supabase } from '../lib/supabase';
 import { slugifyFilename } from './slugify';
 
 /**
@@ -8,13 +7,19 @@ import { slugifyFilename } from './slugify';
  * @returns {Promise<{ file_url: string; file_name: string }>} The storage path and filename
  */
 export async function uploadVoiceFile(file: File, voiceId: string): Promise<{ file_url: string; file_name: string }> {
-  const slug = slugifyFilename(file.name);
-  const path = `voices/${voiceId}/${slug}`;
-  const { error } = await supabase.storage.from('voices').upload(path, file, {
-    cacheControl: '3600',
-    upsert: true
+  // Optional: pre-slugify for server-friendly name (server will also slugify)
+  slugifyFilename(file.name);
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('voiceId', voiceId);
+
+  const res = await fetch('http://localhost:4000/api/upload/voice-file', {
+    method: 'POST',
+    body: formData
   });
-  if (error) throw error;
-  // file_url is the storage path, file_name is the slugified name
-  return { file_url: path, file_name: slug };
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Upload failed');
+  }
+  return res.json();
 }

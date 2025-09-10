@@ -24,6 +24,14 @@ export interface Voice {
   created_at: string;
 }
 
+export interface VoiceFile {
+  id: string;
+  voice_id: string;
+  file_url: string;
+  file_name: string;
+  created_at: string;
+}
+
 export interface CommissionWithTotals extends Commission {
   totalIncome: number;
   totalOutcome: number;

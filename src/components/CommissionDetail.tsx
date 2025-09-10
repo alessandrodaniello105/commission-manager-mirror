@@ -3,6 +3,10 @@ import { ArrowLeft, Plus, Edit2, Trash2, GripVertical } from 'lucide-react';
 import { useCommissionDetail } from '../hooks/useCommissionDetail';
 import { formatCurrency, parseCurrency } from '../utils/currency';
 import type { Phase, Voice } from '../types';
+import { uploadVoiceFile } from '../utils/uploadVoiceFile';
+import { supabase } from '../lib/supabase';
+
+const FILE_SERVER_BASE = 'http://localhost:4000';
 
 interface CommissionDetailProps {
   commissionId: string;
@@ -14,6 +18,7 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
     commission,
     phases,
     voices,
+    voiceFiles,
     totals,
     loading,
     error,
@@ -22,7 +27,8 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
     deletePhase,
     createVoice,
     updateVoice,
-    deleteVoice
+    deleteVoice,
+    refetch
   } = useCommissionDetail(commissionId);
 
   const [showPhaseForm, setShowPhaseForm] = useState(false);
@@ -35,8 +41,9 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
     amount: '',
     type: 'income' as 'income' | 'outcome'
   });
-  // File upload state for Voice
-  const [voiceFiles, setVoiceFiles] = useState<{ name: string; url: string; id?: string }[]>([]);
+  // File upload state for Voice (store real File objects)
+  const [selectedVoiceFiles, setSelectedVoiceFiles] = useState<File[]>([]);
+  const [filesToDelete, setFilesToDelete] = useState<Record<string, boolean>>({});
   const [uploading, setUploading] = useState(false);
   const [draggedPhase, setDraggedPhase] = useState<Phase | null>(null);
   const [draggedVoice, setDraggedVoice] = useState<Voice | null>(null);
@@ -67,22 +74,65 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
     if (amount < 0 || amount > 999999999) return;
 
     try {
+      let savedVoice: Voice | null = null;
       if (editingVoice) {
-        await updateVoice(editingVoice.id, {
+        savedVoice = await updateVoice(editingVoice.id, {
           description: voiceForm.description,
           amount,
           type: voiceForm.type
         });
       } else if (showVoiceForm) {
-        await createVoice(showVoiceForm, {
+        savedVoice = await createVoice(showVoiceForm, {
           description: voiceForm.description,
           amount,
           type: voiceForm.type
         });
       }
+
+      // If there are files selected and we have a saved voice id, upload and insert in DB
+      if (savedVoice && selectedVoiceFiles.length > 0) {
+        setUploading(true);
+        try {
+          for (const file of selectedVoiceFiles) {
+            if (file.type !== 'application/pdf') continue;
+            const { file_url, file_name } = await uploadVoiceFile(file, savedVoice.id);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const sbAny: any = supabase;
+            const { error: insertError } = await sbAny
+              .from('voice_files')
+              .insert([{ voice_id: savedVoice.id, file_url, file_name }]);
+            if (insertError) throw insertError;
+          }
+        } finally {
+          setUploading(false);
+        }
+        // Refresh to show the newly attached files
+        await refetch();
+      }
+
+      // If there are staged deletions for this voice, delete them from FS and DB
+      if (savedVoice && Object.keys(filesToDelete).length > 0) {
+        const entries = Object.entries(filesToDelete).filter(([, del]) => del);
+        for (const [fileId] of entries) {
+          const fileRecord = (voiceFiles[savedVoice.id] || []).find(f => f.id === fileId);
+          if (!fileRecord) continue;
+          await fetch(`${FILE_SERVER_BASE}/api/delete/voice-file`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ voiceId: savedVoice.id, file_name: fileRecord.file_name })
+          });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const sbAny: any = supabase;
+          await sbAny.from('voice_files').delete().eq('id', fileRecord.id);
+        }
+        setFilesToDelete({});
+        await refetch();
+      }
       setVoiceForm({ description: '', amount: '', type: 'income' });
       setShowVoiceForm(null);
       setEditingVoice(null);
+      setSelectedVoiceFiles([]);
+      setFilesToDelete({});
     } catch (err) {
       console.error('Error saving voice:', err);
     }
@@ -102,6 +152,8 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
       type: voice.type
     });
     setShowVoiceForm(voice.phase_id);
+    setSelectedVoiceFiles([]);
+    setFilesToDelete({});
   };
 
   const handleDeletePhase = async (phaseId: string) => {
@@ -363,18 +415,12 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
                             onChange={async (e) => {
                               const files = e.target.files;
                               if (!files) return;
-                              setUploading(true);
-                              // Simulate upload, replace with real upload logic
-                              const uploaded: { name: string; url: string }[] = [];
+                              const next: File[] = [];
                               for (let i = 0; i < files.length; i++) {
                                 const file = files[i];
-                                if (file.type !== 'application/pdf') continue;
-                                // TODO: Replace with real upload, e.g. Supabase Storage
-                                // For now, just use a fake URL
-                                uploaded.push({ name: file.name, url: URL.createObjectURL(file) });
+                                if (file.type === 'application/pdf') next.push(file);
                               }
-                              setVoiceFiles((prev) => [...prev, ...uploaded]);
-                              setUploading(false);
+                              setSelectedVoiceFiles((prev) => [...prev, ...next]);
                               // Reset input value so same file can be re-uploaded if removed
                               e.target.value = '';
                             }}
@@ -388,19 +434,38 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
                           )}
                           {/* Uploaded files badges */}
                           <div className="flex flex-wrap gap-2 mt-2">
-                            {voiceFiles.map((file, idx) => (
-                              <span key={file.url + idx} className="inline-flex items-center px-2 py-1 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-200 rounded text-xs">
+                            {selectedVoiceFiles.map((file, idx) => (
+                              <span key={file.name + idx} className="inline-flex items-center px-2 py-1 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-200 rounded text-xs">
                                 {file.name}
                                 <button
                                   type="button"
                                   className="ml-2 text-xs text-red-500 hover:text-red-700 focus:outline-none"
-                                  onClick={() => setVoiceFiles((prev) => prev.filter((_, i) => i !== idx))}
+                                  onClick={() => setSelectedVoiceFiles((prev) => prev.filter((_, i) => i !== idx))}
                                   title="Rimuovi file"
                                 >
                                   ×
                                 </button>
                               </span>
                             ))}
+                            {editingVoice && voiceFiles[editingVoice.id] && voiceFiles[editingVoice.id].length > 0 && (
+                              voiceFiles[editingVoice.id].map((vf) => (
+                                <span
+                                  key={vf.id}
+                                  className={`inline-flex items-center px-2 py-1 rounded text-xs border ${filesToDelete[vf.id] ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-200 border-red-300 dark:border-red-700 line-through' : 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-200 border-indigo-200 dark:border-indigo-700'}`}
+                                  title={vf.file_name}
+                                >
+                                  {vf.file_name}
+                                  <button
+                                    type="button"
+                                    className={`ml-2 text-xs ${filesToDelete[vf.id] ? 'text-green-600 hover:text-green-700' : 'text-red-500 hover:text-red-700'}`}
+                                    onClick={() => setFilesToDelete(prev => ({ ...prev, [vf.id]: !prev[vf.id] }))}
+                                    title={filesToDelete[vf.id] ? 'Annulla rimozione' : 'Segna per rimozione'}
+                                  >
+                                    {filesToDelete[vf.id] ? '↺' : '×'}
+                                  </button>
+                                </span>
+                              ))
+                            )}
                           </div>
                         </div>
                         <div className="flex space-x-2">
@@ -416,7 +481,7 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
                               setShowVoiceForm(null);
                               setEditingVoice(null);
                               setVoiceForm({ description: '', amount: '', type: 'income' });
-                              setVoiceFiles([]);
+                              setSelectedVoiceFiles([]);
                             }}
                             className="px-3 py-2 bg-gray-300 dark:bg-gray-600 hover:bg-gray-400 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 rounded-lg transition-colors text-sm"
                           >
@@ -451,6 +516,26 @@ export function CommissionDetail({ commissionId, onBack }: CommissionDetailProps
                                 {voice.type === 'income' ? 'Entrata' : 'Uscita'}
                               </span>
                             </div>
+                            {/* Files list (pretty, lightweight chips) */}
+                            {voiceFiles[voice.id] && voiceFiles[voice.id].length > 0 && (
+                              <div className="flex flex-wrap gap-2 mt-2">
+                                {voiceFiles[voice.id].map((vf) => (
+                                  <a
+                                    key={vf.id}
+                                    href={`${FILE_SERVER_BASE}${vf.file_url}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-700 hover:bg-indigo-100 dark:hover:bg-indigo-800/40 transition-colors"
+                                    title={vf.file_name}
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3 mr-1">
+                                      <path d="M14.59 2.59a2 2 0 0 1 2.82 0l3.99 3.99a2 2 0 0 1 0 2.82l-8.48 8.48a5 5 0 0 1-7.07 0 5 5 0 0 1 0-7.07l6.36-6.36a3 3 0 1 1 4.24 4.24L9.54 14.1a1 1 0 0 1-1.41-1.41l6.01-6.01-.71-.71-6.01 6.01a2.5 2.5 0 1 0 3.54 3.54l8.48-8.48a1 1 0 0 0 0-1.41l-3.99-3.99a1 1 0 0 0-1.41 0L7.47 9.17l-.71-.71 7.83-7.83z" />
+                                    </svg>
+                                    {vf.file_name}
+                                  </a>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="flex space-x-1">
