@@ -1,16 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import type { Database } from '../lib/database.types';
-import type { Commission, Phase, Voice } from '../types';
+import type { Commission, Phase, Voice, VoiceFile } from '../types';
 
 export function useCommissionDetail(commissionId: string) {
   const [commission, setCommission] = useState<Commission | null>(null);
   const [phases, setPhases] = useState<Phase[]>([]);
   const [voices, setVoices] = useState<Record<string, Voice[]>>({});
+  const [voiceFiles, setVoiceFiles] = useState<Record<string, VoiceFile[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchCommissionDetail = async () => {
+  const fetchCommissionDetail = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
@@ -54,9 +55,26 @@ export function useCommissionDetail(commissionId: string) {
         voicesByPhase[voice.phase_id].push(voice);
       });
 
+      // Fetch voice_files for these voices
+      const voiceIds = (voicesData || []).map(v => v.id);
+      const voiceFilesByVoice: Record<string, VoiceFile[]> = {};
+      if (voiceIds.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: filesData, error: filesError } = await (supabase as unknown as { from: (table: string) => any }).from('voice_files')
+          .select('*')
+          .in('voice_id', voiceIds)
+          .order('created_at');
+        if (filesError) throw filesError;
+        ((filesData as VoiceFile[]) || []).forEach((f: VoiceFile) => {
+          if (!voiceFilesByVoice[f.voice_id]) voiceFilesByVoice[f.voice_id] = [];
+          voiceFilesByVoice[f.voice_id].push(f);
+        });
+      }
+
       setCommission(commissionData);
       setPhases(phasesData || []);
       setVoices(voicesByPhase);
+      setVoiceFiles(voiceFilesByVoice);
 
       // Update commission totals
       await updateCommissionTotals(commissionData, voicesByPhase);
@@ -65,7 +83,7 @@ export function useCommissionDetail(commissionId: string) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [commissionId]);
 
   const updateCommissionTotals = async (commission: Commission, voicesByPhase: Record<string, Voice[]>) => {
     let totalIncome = 0;
@@ -86,7 +104,7 @@ export function useCommissionDetail(commissionId: string) {
         .update({
           income: totalIncome,
           outcome: totalOutcome
-        } as any)
+        } as Database['public']['Tables']['commissions']['Update'])
         .eq('id', commission.id);
     }
   };
@@ -95,7 +113,7 @@ export function useCommissionDetail(commissionId: string) {
     if (commissionId) {
       fetchCommissionDetail();
     }
-  }, [commissionId]);
+  }, [commissionId, fetchCommissionDetail]);
 
   const createPhase = async (title: string) => {
     try {
@@ -106,7 +124,7 @@ export function useCommissionDetail(commissionId: string) {
             commission_id: commissionId,
             title
           } as Database['public']['Tables']['phases']['Insert']
-        ] as any);
+        ]);
 
       if (error) throw error;
       await fetchCommissionDetail();
@@ -119,7 +137,7 @@ export function useCommissionDetail(commissionId: string) {
     try {
       const { error } = await supabase
         .from('phases')
-        .update(updates as any)
+        .update(updates as Database['public']['Tables']['phases']['Update'])
         .eq('id', phaseId);
 
       if (error) throw error;
@@ -143,35 +161,49 @@ export function useCommissionDetail(commissionId: string) {
     }
   };
 
-  const createVoice = async (phaseId: string, voice: Omit<Voice, 'id' | 'phase_id' | 'created_at'>) => {
+  const createVoice = async (
+    phaseId: string,
+    voice: Omit<Voice, 'id' | 'phase_id' | 'created_at'>
+  ): Promise<Voice | null> => {
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('voices')
         .insert([
           {
             ...voice,
             phase_id: phaseId
           } as Database['public']['Tables']['voices']['Insert']
-        ] as any);
+        ])
+        .select('*')
+        .single();
 
       if (error) throw error;
       await fetchCommissionDetail();
+      return data as unknown as Voice;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create voice');
+      return null;
     }
   };
 
-  const updateVoice = async (voiceId: string, updates: Partial<Voice>) => {
+  const updateVoice = async (
+    voiceId: string,
+    updates: Partial<Voice>
+  ): Promise<Voice | null> => {
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('voices')
-        .update(updates as any)
-        .eq('id', voiceId);
+        .update(updates as Database['public']['Tables']['voices']['Update'])
+        .eq('id', voiceId)
+        .select('*')
+        .single();
 
       if (error) throw error;
       await fetchCommissionDetail();
+      return data as unknown as Voice;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update voice');
+      return null;
     }
   };
 
@@ -210,6 +242,7 @@ export function useCommissionDetail(commissionId: string) {
     commission,
     phases,
     voices,
+    voiceFiles,
     totals,
     loading,
     error,
